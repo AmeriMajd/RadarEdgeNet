@@ -20,48 +20,52 @@ def preprocess_sequence(args):
 
                 if 'track_id' in radar.dtype.names:
                     unique_tracks = np.unique(filtered['track_id'])
-                    point_clouds = []
+                    fused_point_clouds = []
                     labels = []
-                    dtype = [('x_cc', 'float32', (1024,)), ('y_cc', 'float32', (1024,)),
-                             ('vr_compensated', 'float32', (1024,)), ('rcs', 'float32', (1024,))]  # Changed to 1024
                     for track in unique_tracks:
                         track_data = filtered[filtered['track_id'] == track]
-                        if len(track_data) < 5:  # Minimum 5 points
+                        if len(track_data) < 5:
                             continue
-                        # Extract and reshape points, truncate to 1024 if needed
-                        points = np.zeros(1, dtype=dtype)[0]  # Initialize with correct shape
-                        for i, field in enumerate(['x_cc', 'y_cc', 'vr_compensated', 'rcs']):
-                            data_to_assign = track_data[field][:1024]  # Truncate to 1024
-                            points[field][:len(data_to_assign)] = data_to_assign
-                        # Pad with NaN if less than 1024
-                        if len(track_data) < 1024:
-                            for field in ['x_cc', 'y_cc', 'vr_compensated', 'rcs']:
-                                points[field][len(data_to_assign):] = np.nan
+
+                        original_cloud = np.zeros((1024, 4), dtype=np.float32)
+                        n_points = min(len(track_data), 1024)
+                        original_cloud[:n_points, 0] = track_data['x_cc'][:n_points]
+                        original_cloud[:n_points, 1] = track_data['y_cc'][:n_points]
+                        original_cloud[:n_points, 2] = track_data['vr_compensated'][:n_points]
+                        original_cloud[:n_points, 3] = track_data['rcs'][:n_points]
+                        if n_points < 1024:
+                            original_cloud[n_points:] = np.nan
+                        translated_cloud = original_cloud.copy()
+                        translated_cloud[:, 0] += 0.5
+
+                        # Fuse as (2, 1024, 4)
+                        fused_cloud = np.stack([original_cloud, translated_cloud], axis=0)
+                        fused_point_clouds.append(fused_cloud)
+
                         label = 5 if 5 in track_data['label_id'] else 7
-                        point_clouds.append(points)
                         labels.append(label)
 
-                    if point_clouds:
-                        point_clouds = np.array(point_clouds, dtype=dtype)
+                    if fused_point_clouds:
+                        fused_point_clouds = np.array(fused_point_clouds)
                         labels = np.array(labels, dtype='int32')
 
                         # Normalize using global stats
-                        for field in ['x_cc', 'y_cc', 'vr_compensated', 'rcs']:
-                            valid = point_clouds[field][~np.isnan(point_clouds[field])]
+                        for i, field in enumerate(['x_cc', 'y_cc', 'vr_compensated', 'rcs']):
+                            valid = fused_point_clouds[:, :, :, i][~np.isnan(fused_point_clouds[:, :, :, i])]
                             if len(valid) > 0:
                                 mean, std = global_stats[field]['mean'], global_stats[field]['std']
-                                point_clouds[field] = np.where(~np.isnan(point_clouds[field]),
-                                                            (point_clouds[field] - mean) / (std + 1e-6), np.nan)
+                                fused_point_clouds[:, :, :, i] = np.where(~np.isnan(fused_point_clouds[:, :, :, i]),
+                                                                          (fused_point_clouds[:, :, :, i] - mean) / (std + 1e-6), np.nan)
 
                         # Save to HDF5
                         os.makedirs(output_dir, exist_ok=True)
                         output_path = os.path.join(output_dir, f'{seq_name}_preprocessed.h5')
                         with h5py.File(output_path, 'w') as f_out:
-                            f_out.create_dataset('point_clouds', data=point_clouds)
+                            f_out.create_dataset('fused_point_clouds', data=fused_point_clouds)
                             f_out.create_dataset('labels', data=labels)
                         print(f"Preprocessed {seq_name} saved to: {output_path}")
                     else:
-                        print(f"No valid tracks found in {seq_name}.")
+                        print(f"No valid fused tracks found in {seq_name}.")
                 else:
                     print(f"No 'track_id' field in {seq_name}. Skipping.")
             else:
@@ -71,7 +75,7 @@ def preprocess_sequence(args):
 
 def compute_global_stats(base_dir):
     all_x_cc, all_y_cc, all_vr, all_rcs = [], [], [], []
-    for seq in range(1, 131):  # Limit to 130 sequences
+    for seq in range(1, 158):
         seq_dir = os.path.join(base_dir, f"sequence_{seq}")
         if os.path.exists(seq_dir):
             h5_path = Path(seq_dir) / 'radar_data.h5'
@@ -93,7 +97,7 @@ def compute_global_stats(base_dir):
     return stats
 
 if __name__ == '__main__':
-    base_dir = r"C:\Users\ameri\MmWave Radar\RadarScenes\data"  # Match your path
+    base_dir = r"C:\Users\ameri\MmWave Radar\RadarScenes\data"
     output_dir = r"C:\Users\ameri\MmWave\data\preprocessed"
 
     print(f"Base directory: {base_dir}")
