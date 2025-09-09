@@ -6,11 +6,7 @@ import time
 from sklearn.metrics import accuracy_score, f1_score
 import os
 
-
 tf.keras.mixed_precision.set_global_policy('mixed_float16')
-
-
-
 def load_data(file_path):
     with h5py.File(file_path, 'r') as f:
         clouds = f['fused_point_clouds'][:]  # Load as 4D array (n_samples, 2, 1024, 4)
@@ -23,7 +19,6 @@ class NanMaskLayer(layers.Layer):
     def call(self, inputs):
         mask = ~tf.math.is_nan(tf.reduce_sum(inputs, axis=-1, keepdims=True))
         return tf.where(mask, inputs, tf.zeros_like(inputs))
-
 
 class DataGenerator(tf.keras.utils.Sequence):
     def __init__(self, clouds, labels, batch_size=32, translation_range=[-1, 1]):
